@@ -6,6 +6,23 @@ __pycache__/
 # C extensions
 *.so
 
+._*
+detect.py
+deteval.py
+east_dataset.py
+inference.py
+model.py
+loss.py
+
+/predictions
+/pths
+/trained_models
+/
+wandb
+
+requirements.txt
+
+
 # Distribution / packaging
 .Python
 build/
