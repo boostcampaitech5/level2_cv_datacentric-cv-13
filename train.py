@@ -30,7 +30,7 @@ def parse_args():
     parser.add_argument('--model_dir', type=str, default=os.environ.get('SM_MODEL_DIR',
                                                                         'trained_models'))
 
-    parser.add_argument('--device', default='cuda' if cuda.is_available() else 'cpu')
+    parser.add_argument('--device', default='cuda:0' if cuda.is_available() else 'cpu')
     parser.add_argument('--num_workers', type=int, default=8)
 
     parser.add_argument('--image_size', type=int, default=2048)
@@ -70,7 +70,7 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
     
     if use_wandb:
         print('Initialize WandB ...')
-        wandb.init(name = f'exp1',
+        wandb.init(name = f'exp1.dh',
                    project = "Data-Cnetric",
                    entity = "connect-cv-13_2")
     
