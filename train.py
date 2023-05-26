@@ -70,42 +70,51 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
     
     if use_wandb:
         print('Initialize WandB ...')
-        wandb.init(name = f'exp1',
+        wandb.init(name = f'exp3.jh',
                    project = "Data-Cnetric",
                    entity = "connect-cv-13_2")
     
-    accelerator = Accelerator(
-        gradient_accumulation_steps = 1,
-        mixed_precision             = 'fp16'
-    )
-        
-    dataset = SceneTextDataset(
+    train_dataset = SceneTextDataset(
         data_dir,
         split='train',
         image_size=image_size,
         crop_size=input_size,
         ignore_tags=ignore_tags
     )
-    dataset = EASTDataset(dataset)
-    num_batches = math.ceil(len(dataset) / batch_size)
+    val_dataset = SceneTextDataset(
+        data_dir,
+        split='val',
+        image_size=image_size,
+        crop_size=input_size,
+        ignore_tags=ignore_tags
+    )
+    
+    
+    train_dataset = EASTDataset(train_dataset)
+    val_dataset = EASTDataset(val_dataset)
+    
+    num_batches = math.ceil(len(train_dataset) / batch_size)
+    
     train_loader = DataLoader(
-        dataset,
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=num_workers
+    )
+    val_loader = DataLoader(
+        val_dataset,
         batch_size=batch_size,
         shuffle=True,
         num_workers=num_workers
     )
 
-    #device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    device = accelerator.device
-    
-    
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     
     model = EAST()
     model.to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     scheduler = lr_scheduler.MultiStepLR(optimizer, milestones=[max_epoch // 2], gamma=0.1)
     
-    model, optimizer, train_loader = accelerator.prepare(model, optimizer, train_loader)
 
     model.train()
     for epoch in range(max_epoch):
@@ -117,19 +126,19 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
                 loss, extra_info = model.train_step(img, gt_score_map, gt_geo_map, roi_mask)
                 optimizer.zero_grad()
 
-                # loss.backward()
-                accelerator.backward(loss)
+                loss.backward()
+                # accelerator.backward(loss)
                 optimizer.step()
 
                 loss_val = loss.item()
                 epoch_loss += loss_val
 
                 pbar.update(1)
-                val_dict = {
+                train_dict = {
                     'Cls loss': extra_info['cls_loss'], 'Angle loss': extra_info['angle_loss'],
                     'IoU loss': extra_info['iou_loss']
                 }
-                pbar.set_postfix(val_dict)
+                pbar.set_postfix(train_dict)
                 
                 if use_wandb:
                     wandb.log({'Mean loss': epoch_loss / num_batches,
@@ -143,7 +152,36 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
 
         print('Mean loss: {:.4f} | Elapsed time: {}'.format(
             epoch_loss / num_batches, timedelta(seconds=time.time() - epoch_start)))
+        
+        with torch.no_grad():
+            epoch_loss, epoch_start = 0, time.time()
+            model.eval()
+            with tqdm(total=num_batches) as pbar2:
+                for img, gt_score_map, gt_geo_map, roi_mask in val_loader:
+                    pbar2.set_description('[Epoch {}]'.format(epoch + 1))
 
+                    val_loss, extra_info = model.train_step(img, gt_score_map, gt_geo_map, roi_mask)
+
+                    loss_val = val_loss.item()
+                    epoch_loss += loss_val
+
+                    pbar2.update(1)
+                    val_dict = {
+                        'Val Cls loss': extra_info['cls_loss'], 'Val Angle loss': extra_info['angle_loss'],
+                        'Val IoU loss': extra_info['iou_loss']
+                    }
+                    pbar.set_postfix(val_dict)
+                    
+                    if use_wandb:
+                        wandb.log({'[val] Mean loss': epoch_loss / num_batches,
+                                '[val] Cls loss': extra_info['cls_loss'],
+                                '[val] Angle loss': extra_info['angle_loss'],
+                                    '[val] IoU loss': extra_info['iou_loss']
+                                # 'Val Acc': val_acc,
+                                })
+            print('Val Mean loss: {:.4f} | Elapsed time: {}'.format(
+                epoch_loss / num_batches, timedelta(seconds=time.time() - epoch_start)))
+        
         if (epoch + 1) % save_interval == 0:
             if not osp.exists(model_dir):
                 os.makedirs(model_dir)
